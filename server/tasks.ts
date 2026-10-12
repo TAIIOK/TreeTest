@@ -54,7 +54,7 @@ export const tasks: Task[] = [
   {
     id: "exprs",
     title: "Порядок вызовов",
-    blurb: "Сначала аргументы, потом внешний вызов",
+    blurb: "Каждый square заходит в метод, потом add",
     source: `public class ExprOrder {
     static int square(int n) {
         return n * n;

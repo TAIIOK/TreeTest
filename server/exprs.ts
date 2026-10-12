@@ -16,49 +16,13 @@ type CallNode = {
   inner: CallNode[];
 };
 
-export function expandLineSteps(source: string, lineSteps: { line: number }[]): Span[] {
-  const lines = source.split("\n");
-  const loops: OpenLoop[] = [];
-  const result: Span[] = [];
+export function fragmentKey(span: Span): string {
+  return `L${span.line}:${span.start}-${span.end}`;
+}
 
-  for (const step of lineSteps) {
-    const text = lines[step.line - 1] ?? "";
-    while (loops.length > 0) {
-      const top = loops[loops.length - 1];
-      if (step.line === top.line || top.body.has(step.line)) break;
-      const finished = loops.pop();
-      if (finished?.sawBody) result.push(...forVisit(finished.line, finished.text, finished.header, false));
-    }
-
-    const header = parseForHeader(text);
-    const top = loops[loops.length - 1];
-    if (top && top.body.has(step.line)) top.sawBody = true;
-
-    if (header && top && top.line === step.line) {
-      result.push(...forVisit(step.line, text, header, false));
-      top.sawBody = false;
-      continue;
-    }
-    if (header && !loops.some((loop) => loop.line === step.line)) {
-      result.push(...forVisit(step.line, text, header, true));
-      loops.push({
-        line: step.line,
-        text,
-        header,
-        body: forBodyLines(lines, step.line, header.closeParen),
-        sawBody: false,
-      });
-      continue;
-    }
-
-    result.push(...spansForVisit(step.line, text));
-  }
-
-  while (loops.length > 0) {
-    const finished = loops.pop();
-    if (finished?.sawBody) result.push(...forVisit(finished.line, finished.text, finished.header, false));
-  }
-  return result;
+export function describeFragment(line: string, span: Span): string {
+  const shown = invocationText(line, span) ?? span.text;
+  return `${fragmentKey(span)} ${shown}`;
 }
 
 export function clickableTargets(source: string): Span[] {
@@ -88,10 +52,13 @@ export function clickableTargets(source: string): Span[] {
   return targets;
 }
 
-function spansForVisit(line: number, text: string): Span[] {
-  const calls = executionOrder(parseCalls(text));
-  if (calls.length === 0) return [statementSpan(line, text)];
-  return calls.map((call) => ({ line, ...call }));
+function invocationText(line: string, span: Span): string | null {
+  if (!/^[A-Za-z_$][\w$]*$/.test(span.text)) return null;
+  let cursor = span.end;
+  while (cursor < line.length && /\s/.test(line[cursor])) cursor += 1;
+  if (line[cursor] !== "(") return null;
+  const close = matchingParen(line, cursor, line.length);
+  return line.slice(span.start, Math.min(line.length, close + 1)).replace(/\s+/g, " ");
 }
 
 type Clause = { start: number; end: number; text: string };
@@ -102,26 +69,6 @@ type ForHeader = {
   condition: Clause | null;
   update: Clause | null;
 };
-
-type OpenLoop = {
-  line: number;
-  text: string;
-  header: ForHeader;
-  body: Set<number>;
-  sawBody: boolean;
-};
-
-function forVisit(line: number, text: string, header: ForHeader, first: boolean): Span[] {
-  const clauses = first ? [header.init, header.condition] : [header.update, header.condition];
-  return clauses.flatMap((clause) => clauseSpans(line, text, clause));
-}
-
-function clauseSpans(line: number, text: string, clause: Clause | null): Span[] {
-  if (!clause) return [];
-  const calls = executionOrder(parseRegion(text, clause.start, clause.end));
-  if (calls.length === 0) return [{ line, start: clause.start, end: clause.end, text: clause.text }];
-  return calls.map((call) => ({ line, ...call }));
-}
 
 function parseForHeader(line: string): ForHeader | null {
   const match = /\bfor\s*\(/.exec(line);
@@ -169,54 +116,6 @@ function splitTop(line: string, from: number, to: number, separator: string): { 
   return parts;
 }
 
-function forBodyLines(lines: string[], forLine: number, closeParen: number): Set<number> {
-  const body = new Set<number>();
-  let lineIndex = forLine - 1;
-  let column = closeParen + 1;
-  while (lineIndex < lines.length) {
-    const line = lines[lineIndex];
-    while (column < line.length && /\s/.test(line[column])) column += 1;
-    if (column < line.length && !(line[column] === "/" && line[column + 1] === "/")) break;
-    lineIndex += 1;
-    column = 0;
-  }
-  if (lineIndex >= lines.length) return body;
-  if (lines[lineIndex][column] === "{") {
-    const end = matchBrace(lines, lineIndex, column);
-    for (let current = lineIndex; current <= end.line; current += 1) {
-      if (current + 1 === forLine) continue;
-      if (isSkippableLine(lines[current] ?? "")) continue;
-      body.add(current + 1);
-    }
-    return body;
-  }
-  if (lineIndex + 1 !== forLine && !isSkippableLine(lines[lineIndex] ?? "")) body.add(lineIndex + 1);
-  return body;
-}
-
-function matchBrace(lines: string[], startLine: number, startColumn: number): { line: number; column: number } {
-  let depth = 0;
-  for (let lineIndex = startLine; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex] ?? "";
-    let index = lineIndex === startLine ? startColumn : 0;
-    while (index < line.length) {
-      const char = line[index];
-      if (char === '"' || char === "'") {
-        index = skipString(line, index, line.length);
-        continue;
-      }
-      if (char === "/" && line[index + 1] === "/") break;
-      if (char === "{") depth += 1;
-      else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) return { line: lineIndex, column: index };
-      }
-      index += 1;
-    }
-  }
-  return { line: lines.length - 1, column: 0 };
-}
-
 function statementSpan(line: number, text: string): Span {
   const start = Math.max(0, text.search(/\S/));
   const end = text.trimEnd().length;
@@ -226,15 +125,6 @@ function statementSpan(line: number, text: string): Span {
     end: Math.max(start, end),
     text: text.slice(start, Math.max(start, end)),
   };
-}
-
-function executionOrder(calls: CallNode[]): { start: number; end: number; text: string }[] {
-  const ordered: { start: number; end: number; text: string }[] = [];
-  for (const call of calls) {
-    ordered.push(...executionOrder(call.inner));
-    ordered.push({ start: call.nameStart, end: call.nameEnd, text: call.name });
-  }
-  return ordered;
 }
 
 function sourceOrder(calls: CallNode[]): { start: number; end: number; text: string }[] {

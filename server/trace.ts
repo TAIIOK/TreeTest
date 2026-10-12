@@ -24,16 +24,3 @@ export function isSkippableLine(line: string): boolean {
     !/^(if|for|while|switch|catch)\b/.test(text);
   return looksLikeSignature;
 }
-
-export function allowsImmediateRepeat(line: string, source: string): boolean {
-  const text = line.trim();
-  if (/^(for|while|if|switch)\b/.test(text)) return true;
-  const names = new Set<string>();
-  for (const match of source.matchAll(/\b(?:void|int|boolean|long|double|float|char|String)\s+(\w+)\s*\(/g)) {
-    if (match[1] !== "main") names.add(match[1]);
-  }
-  for (const name of names) {
-    if (new RegExp(`\\b${name}\\s*\\(`).test(text)) return true;
-  }
-  return false;
-}
