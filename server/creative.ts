@@ -1,6 +1,7 @@
 import { fragmentKey, type Span } from "@/server/exprs";
 import { completeText } from "@/server/litellm";
 import { numberSource } from "@/server/source";
+import { parseSnippet } from "@/server/treesitter";
 
 const MAX_FRAGMENTS = 40;
 
@@ -19,6 +20,19 @@ Skip blank lines, lone braces, imports, and signatures that do not run.
 At most ${MAX_FRAGMENTS} fragments. Every text must occur on its line.`;
 
 export async function proposeFragments(
+  source: string,
+  signal?: AbortSignal,
+): Promise<{ language: string; targets: Span[]; hints: Record<string, string> }> {
+  try {
+    const parsed = await parseSnippet(source);
+    if (parsed && parsed.targets.length > 0) return parsed;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+  }
+  return proposeWithModel(source, signal);
+}
+
+async function proposeWithModel(
   source: string,
   signal?: AbortSignal,
 ): Promise<{ language: string; targets: Span[]; hints: Record<string, string> }> {

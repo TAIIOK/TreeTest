@@ -51,13 +51,28 @@ function creativeInstructions(language: string, previous: TraceStep | undefined,
     return `This is ${language}. Pick the first statement of the entry point. Do not enter a function body before its call.` + tail;
   }
   const name = `«${previous.text}»`;
-  if (hint === "call") {
-    return `This is ${language}. The call ${name} just executed. If a fragment is marked as the function body that runs immediately after this call, that body is next. Do not continue the caller before that body.` + tail;
+  if (hint?.includes("loop initializer")) {
+    return `This is ${language}. The loop initializer ${name} just ran. The loop condition or iterator is next, before the body.` + tail;
   }
-  if (hint?.startsWith("function body")) {
+  if (hint?.includes("loop condition")) {
+    return `This is ${language}. The loop condition ${name} just ran. If it is true, the body is next. If it is false, the statement after the loop is next. Do not choose done and do not choose the update before the body.`;
+  }
+  if (hint?.includes("loop update")) {
+    return `This is ${language}. The loop update ${name} just ran. The loop condition is next, even if it is now false. Do not choose done and do not choose the body before that condition.`;
+  }
+  if (hint?.includes("loop iterator")) {
+    return `This is ${language}. The loop iterator ${name} just ran. The body is next. After the body, repeat while the iterator has another item, then continue after the loop.` + tail;
+  }
+  if (hint?.includes("loop body")) {
+    return `This is ${language}. The loop body ${name} just ran. If the body has another statement, continue it. Otherwise the update is next, or the condition if this loop has no update.` + tail;
+  }
+  if (hint === "call") {
+    return `This is ${language}. The call ${name} just executed. If a fragment is marked as the function body that runs immediately after this call, that body is next. If no body is marked for this call, continue the caller.` + tail;
+  }
+  if (hint?.includes("function body")) {
     return `This is ${language}. The function body ${name} just finished. Return to the caller and continue with the next statement after that call.` + tail;
   }
-  return `This is ${language}. The statement ${name} just executed. Continue the entry point from top to bottom. Do not enter a function body before its call. A loop checks its condition again after each step, and only the taken branch runs.` + tail;
+  return `This is ${language}. The statement ${name} just executed. Continue the entry point from top to bottom. Do not enter a function body before its call. A loop starts with its initializer or iterator, then its condition, and checks that condition again after the update.` + tail;
 }
 
 async function walkTrace(
@@ -93,7 +108,9 @@ async function walkTrace(
     const previous = steps[steps.length - 1];
     const stepCriteria = { ...criteria };
     const situation = previous && mode.kind === "java" ? situationOf(source, previous) : undefined;
+    const previousHint = previous && mode.kind === "creative" ? mode.hints[fragmentKey(previous)] : undefined;
     if (situation === "for-update" || situation === "for-condition") delete stepCriteria.done;
+    if (previousHint?.includes("loop condition") || previousHint?.includes("loop update")) delete stepCriteria.done;
     const intro =
       mode.kind === "java"
         ? "Java program. Execution starts at main."

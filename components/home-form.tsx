@@ -82,7 +82,7 @@ export function HomeForm({ tasks }: { tasks: TaskCard[] }) {
           disabled={pending}
         >
           <strong>Творческий</strong>
-          <span>Rust, Go или другой язык. Фрагменты и порядок считают модели</span>
+          <span>Rust, Go, Python и другие. Фрагменты находит tree-sitter, порядок — модель</span>
         </button>
       </div>
 
