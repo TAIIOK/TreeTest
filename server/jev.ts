@@ -32,8 +32,41 @@ function instructionsFor(source: string, previous: TraceStep | undefined): strin
 }
 
 export async function traceJava(source: string, signal?: AbortSignal): Promise<TraceStep[]> {
+  return walkTrace(source, clickableTargets(source), signal, { kind: "java" });
+}
+
+export async function traceCreative(
+  source: string,
+  targets: Span[],
+  language: string,
+  hints: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<TraceStep[]> {
+  return walkTrace(source, targets, signal, { kind: "creative", language, hints });
+}
+
+function creativeInstructions(language: string, previous: TraceStep | undefined, hint?: string): string {
+  const tail = " Do not choose the fragment that just executed. Choose done when the entry point has finished and nothing it called is still running.";
+  if (!previous) {
+    return `This is ${language}. Pick the first statement of the entry point. Do not enter a function body before its call.` + tail;
+  }
+  const name = `«${previous.text}»`;
+  if (hint === "call") {
+    return `This is ${language}. The call ${name} just executed. If a fragment is marked as the function body that runs immediately after this call, that body is next. Do not continue the caller before that body.` + tail;
+  }
+  if (hint?.startsWith("function body")) {
+    return `This is ${language}. The function body ${name} just finished. Return to the caller and continue with the next statement after that call.` + tail;
+  }
+  return `This is ${language}. The statement ${name} just executed. Continue the entry point from top to bottom. Do not enter a function body before its call. A loop checks its condition again after each step, and only the taken branch runs.` + tail;
+}
+
+async function walkTrace(
+  source: string,
+  targets: Span[],
+  signal: AbortSignal | undefined,
+  mode: { kind: "java" } | { kind: "creative"; language: string; hints: Record<string, string> },
+): Promise<TraceStep[]> {
   const model = process.env.JEV_MODEL || "nimble";
-  const targets = clickableTargets(source);
   if (targets.length === 0) {
     throw new Error("В коде нет исполняемых строк");
   }
@@ -43,7 +76,7 @@ export async function traceJava(source: string, signal?: AbortSignal): Promise<T
   for (const span of targets) {
     const key = fragmentKey(span);
     byKey.set(key, span);
-    criteria[key] = describeFragment(lineText(source, span.line), span);
+    criteria[key] = described(source, span, mode.kind === "creative" ? mode.hints[key] : undefined);
   }
 
   const steps: TraceStep[] = [];
@@ -55,18 +88,25 @@ export async function traceJava(source: string, signal?: AbortSignal): Promise<T
       steps.length === 0
         ? "No fragment has executed yet."
         : steps
-            .map((step, stepIndex) => `${stepIndex + 1}. ${describeFragment(lineText(source, step.line), step)}`)
+            .map((step, stepIndex) => `${stepIndex + 1}. ${criteria[fragmentKey(step)]}`)
             .join("\n");
     const previous = steps[steps.length - 1];
     const stepCriteria = { ...criteria };
-    const situation = previous ? situationOf(source, previous) : undefined;
+    const situation = previous && mode.kind === "java" ? situationOf(source, previous) : undefined;
     if (situation === "for-update" || situation === "for-condition") delete stepCriteria.done;
+    const intro =
+      mode.kind === "java"
+        ? "Java program. Execution starts at main."
+        : `${mode.language} program. Execution starts at its entry point.`;
     const choice = await chooseNext({
       model,
-      instructions: instructionsFor(source, previous),
+      instructions:
+        mode.kind === "java"
+          ? instructionsFor(source, previous)
+          : creativeInstructions(mode.language, previous, previous ? mode.hints[fragmentKey(previous)] : undefined),
       criteria: stepCriteria,
       signal,
-      state: `Java program. Execution starts at main.\n${numberSource(source)}\n\nFragments:\n${catalog}\n\nAlready executed, in order:\n${history}${rejection}`,
+      state: `${intro}\n${numberSource(source)}\n\nFragments:\n${catalog}\n\nAlready executed, in order:\n${history}${rejection}`,
     });
 
     if (choice === "done") {
@@ -80,15 +120,25 @@ export async function traceJava(source: string, signal?: AbortSignal): Promise<T
 
     if (previous && fragmentKey(previous) === choice) {
       if (rejection) return finish(steps);
-      rejection = `\n\nThe last answer repeated ${describeFragment(lineText(source, previous.line), previous)}, which just executed. Choose a different fragment.`;
+      rejection = `\n\nThe last answer repeated ${criteria[choice]}, which just executed. Choose a different fragment.`;
       continue;
     }
 
     rejection = "";
     steps.push(span);
+    if (mode.kind === "creative" && steps.filter((step) => fragmentKey(step) === choice).length >= 6) {
+      return finish(steps);
+    }
   }
 
   throw new Error("Трасса слишком длинная, упростите программу");
+}
+
+function described(source: string, span: Span, hint?: string): string {
+  const text = describeFragment(lineText(source, span.line), span);
+  if (!hint) return text;
+  const space = text.indexOf(" ");
+  return `${text.slice(0, space)} ${hint}: ${text.slice(space + 1)}`;
 }
 
 function finish(steps: TraceStep[]): TraceStep[] {

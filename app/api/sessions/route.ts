@@ -3,9 +3,9 @@ import { createSession, SessionError } from "@/server/sessions";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  let body: { taskId?: unknown; source?: unknown };
+  let body: { taskId?: unknown; source?: unknown; creative?: unknown };
   try {
-    body = (await request.json()) as { taskId?: unknown; source?: unknown };
+    body = (await request.json()) as { taskId?: unknown; source?: unknown; creative?: unknown };
   } catch {
     return Response.json({ error: "Некорректный запрос" }, { status: 400 });
   }
@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     const session = await createSession({
       taskId: typeof body.taskId === "string" ? body.taskId : undefined,
       source: typeof body.source === "string" ? body.source : undefined,
+      creative: body.creative === true,
     });
     return Response.json(session);
   } catch (error) {

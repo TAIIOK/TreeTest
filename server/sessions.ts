@@ -1,7 +1,8 @@
 import type { ClickFailure, ClickSuccess, PublicSession, Span, StepMark } from "@/lib/types";
+import { proposeFragments } from "@/server/creative";
 import { clickableTargets } from "@/server/exprs";
-import { traceJava } from "@/server/jev";
-import { InputError, normalizeSource } from "@/server/source";
+import { traceCreative, traceJava } from "@/server/jev";
+import { InputError, normalizeSnippet, normalizeSource } from "@/server/source";
 import { findTask } from "@/server/tasks";
 import type { TraceStep } from "@/server/trace";
 
@@ -21,11 +22,12 @@ type Session = {
   cursor: number;
   marks: StepMark[];
   taskTitle: string;
+  language?: string;
   mistake?: Mistake;
 };
 
-const globalStore = globalThis as unknown as { __traceSessionsV6?: Map<string, Session> };
-const sessions = (globalStore.__traceSessionsV6 ??= new Map<string, Session>());
+const globalStore = globalThis as unknown as { __traceSessionsV7?: Map<string, Session> };
+const sessions = (globalStore.__traceSessionsV7 ??= new Map<string, Session>());
 
 export class SessionError extends Error {
   status: number;
@@ -37,9 +39,12 @@ export class SessionError extends Error {
   }
 }
 
-export async function createSession(input: { taskId?: string; source?: string }): Promise<PublicSession> {
+export async function createSession(input: { taskId?: string; source?: string; creative?: boolean }): Promise<PublicSession> {
   let source: string;
   let taskTitle = "Свой код";
+  let targets = undefined as ReturnType<typeof clickableTargets> | undefined;
+  let language: string | undefined;
+  let creative = false;
 
   if (input.taskId) {
     const task = findTask(input.taskId);
@@ -48,18 +53,27 @@ export async function createSession(input: { taskId?: string; source?: string })
     taskTitle = task.title;
   } else if (typeof input.source === "string") {
     try {
-      source = normalizeSource(input.source);
+      source = input.creative ? normalizeSnippet(input.source) : normalizeSource(input.source);
     } catch (error) {
       if (error instanceof InputError) throw new SessionError(400, error.message);
       throw error;
     }
+    creative = Boolean(input.creative);
   } else {
     throw new SessionError(400, "Выберите задачу или вставьте код");
   }
 
   let steps: TraceStep[];
   try {
-    steps = await traceJava(source, AbortSignal.timeout(60_000));
+    if (creative) {
+      const proposed = await proposeFragments(source, AbortSignal.timeout(40_000));
+      language = proposed.language;
+      targets = proposed.targets;
+      taskTitle = `Творческий · ${proposed.language}`;
+      steps = await traceCreative(source, proposed.targets, proposed.language, proposed.hints, AbortSignal.timeout(60_000));
+    } else {
+      steps = await traceJava(source, AbortSignal.timeout(60_000));
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Не удалось построить трассу";
     throw new SessionError(502, message);
@@ -69,10 +83,11 @@ export async function createSession(input: { taskId?: string; source?: string })
     id: crypto.randomUUID(),
     source,
     steps,
-    targets: clickableTargets(source),
+    targets: targets ?? clickableTargets(source),
     cursor: 0,
     marks: [],
     taskTitle,
+    language,
   };
   sessions.set(session.id, session);
   return toPublic(session);
@@ -152,6 +167,7 @@ export function explainContext(id: string, token: string) {
     cursor: session.cursor,
     clickedLine: session.mistake.clickedLine,
     clickedText: session.mistake.clickedText,
+    language: session.language,
   };
 }
 
@@ -188,5 +204,6 @@ function toPublic(session: Session): PublicSession {
     marks: session.marks.map((mark) => ({ ...mark })),
     targets: session.targets.map((target) => ({ ...target })),
     taskTitle: session.taskTitle,
+    creative: Boolean(session.language),
   };
 }

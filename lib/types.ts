@@ -21,6 +21,7 @@ export type PublicSession = {
   marks: StepMark[];
   targets: Span[];
   taskTitle: string;
+  creative: boolean;
 };
 
 export type ClickSuccess = {

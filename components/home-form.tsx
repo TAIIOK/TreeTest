@@ -20,6 +20,7 @@ export function HomeForm({ tasks }: { tasks: TaskCard[] }) {
 
   const task = tasks.find((item) => item.id === selected);
   const custom = selected === "custom";
+  const creative = selected === "creative";
   const lineCount = useMemo(() => (source.trim() ? source.replace(/\r\n/g, "\n").trim().split("\n").length : 0), [source]);
 
   async function start() {
@@ -29,7 +30,7 @@ export function HomeForm({ tasks }: { tasks: TaskCard[] }) {
       const response = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(custom ? { source } : { taskId: selected }),
+        body: JSON.stringify(creative ? { source, creative: true } : custom ? { source } : { taskId: selected }),
       });
       const data = (await response.json()) as { id?: string; error?: string };
       if (!response.ok || !data.id) {
@@ -74,14 +75,27 @@ export function HomeForm({ tasks }: { tasks: TaskCard[] }) {
           <strong>Свой код</strong>
           <span>Один файл с методом main</span>
         </button>
+        <button
+          type="button"
+          className={creative ? "choice is-selected" : "choice"}
+          onClick={() => setSelected("creative")}
+          disabled={pending}
+        >
+          <strong>Творческий</strong>
+          <span>Rust, Go или другой язык. Фрагменты и порядок считают модели</span>
+        </button>
       </div>
 
-      {custom ? (
+      {custom || creative ? (
         <textarea
           className="editor"
           value={source}
           spellCheck={false}
-          placeholder={"public class Main {\n    public static void main(String[] args) {\n        \n    }\n}"}
+          placeholder={
+            creative
+              ? 'fn main() {\n    let n = 2;\n    println!("{}", n);\n}'
+              : "public class Main {\n    public static void main(String[] args) {\n        \n    }\n}"
+          }
           onChange={(event) => setSource(event.target.value)}
           disabled={pending}
         />
@@ -99,10 +113,10 @@ export function HomeForm({ tasks }: { tasks: TaskCard[] }) {
       )}
 
       <div className="actions">
-        <button type="button" className="primary" onClick={start} disabled={pending || (custom && !source.trim())}>
-          {pending ? "Строим трассу…" : "Начать"}
+        <button type="button" className="primary" onClick={start} disabled={pending || ((custom || creative) && !source.trim())}>
+          {pending ? (creative ? "Модели строят трассу…" : "Строим трассу…") : "Начать"}
         </button>
-        {custom ? <span className="meta">{lineCount} из 100 строк</span> : null}
+        {custom || creative ? <span className="meta">{lineCount} из 100 строк</span> : null}
         {error ? <span className="error-text">{error}</span> : null}
       </div>
     </main>

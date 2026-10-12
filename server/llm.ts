@@ -2,11 +2,14 @@ import { completeText, type ChatMessage } from "@/server/litellm";
 import { numberSource } from "@/server/source";
 import type { TraceStep } from "@/server/trace";
 
-const SYSTEM = `Ты объясняешь ошибку в упражнении на порядок исполнения Java.
+function systemPrompt(language?: string): string {
+  const subject = language ? `кода на языке ${language}` : "Java";
+  return `Ты объясняешь ошибку в упражнении на порядок исполнения ${subject}.
 Ответь по-русски, 2–4 предложения.
 Скажи, почему выбранный фрагмент не выполняется следующим, и какой вызов или оператор следующий и что он делает.
 Не перечисляй шаги после верной строки.
 Не используй заголовки и списки.`;
+}
 
 export function buildExplainMessages(input: {
   source: string;
@@ -14,6 +17,7 @@ export function buildExplainMessages(input: {
   cursor: number;
   clickedLine: number;
   clickedText: string;
+  language?: string;
 }): ChatMessage[] {
   const correct = input.steps[input.cursor];
   if (!correct) {
@@ -31,7 +35,7 @@ export function buildExplainMessages(input: {
           .join("\n");
 
   return [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: systemPrompt(input.language) },
     {
       role: "user",
       content: [

@@ -9,20 +9,22 @@ export class InputError extends Error {
 }
 
 export function normalizeSource(source: string): string {
-  const normalized = source.replace(/\r\n/g, "\n").trim();
-  if (!normalized) {
-    throw new InputError("Вставьте Java-код");
-  }
-  if (normalized.length > MAX_CHARS) {
-    throw new InputError("Код слишком длинный");
-  }
-  const lineCount = normalized.split("\n").length;
-  if (lineCount > MAX_LINES) {
-    throw new InputError("Не больше 100 строк");
-  }
+  const normalized = boundedSource(source, "Вставьте Java-код");
   if (!/\bmain\s*\(/.test(normalized)) {
     throw new InputError("Нужен метод main");
   }
+  return normalized;
+}
+
+export function normalizeSnippet(source: string): string {
+  return boundedSource(source, "Вставьте код");
+}
+
+function boundedSource(source: string, emptyMessage: string): string {
+  const normalized = source.replace(/\r\n/g, "\n").trim();
+  if (!normalized) throw new InputError(emptyMessage);
+  if (normalized.length > MAX_CHARS) throw new InputError("Код слишком длинный");
+  if (normalized.split("\n").length > MAX_LINES) throw new InputError("Не больше 100 строк");
   return normalized;
 }
 
