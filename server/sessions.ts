@@ -24,8 +24,8 @@ type Session = {
   mistake?: Mistake;
 };
 
-const globalStore = globalThis as unknown as { __traceSessionsV5?: Map<string, Session> };
-const sessions = (globalStore.__traceSessionsV5 ??= new Map<string, Session>());
+const globalStore = globalThis as unknown as { __traceSessionsV6?: Map<string, Session> };
+const sessions = (globalStore.__traceSessionsV6 ??= new Map<string, Session>());
 
 export class SessionError extends Error {
   status: number;

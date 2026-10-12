@@ -20,9 +20,26 @@ export function fragmentKey(span: Span): string {
   return `L${span.line}:${span.start}-${span.end}`;
 }
 
+export type Situation = "for-init" | "for-condition" | "for-update" | "for-body" | "call" | "if" | "method" | "main";
+
 export function describeFragment(line: string, span: Span): string {
   const shown = invocationText(line, span) ?? span.text;
   return `${fragmentKey(span)} ${shown}`;
+}
+
+export function situationOf(source: string, span: Span): Situation {
+  const lines = source.split("\n");
+  const line = lines[span.line - 1] ?? "";
+  const header = parseForHeader(line);
+  if (sameClause(header?.init, span)) return "for-init";
+  if (sameClause(header?.condition, span)) return "for-condition";
+  if (sameClause(header?.update, span)) return "for-update";
+  if (/^[A-Za-z_$][\w$]*$/.test(span.text) && line.slice(span.end).trimStart().startsWith("(")) return "call";
+  if (/^\s*if\b/.test(line)) return "if";
+  if (isForBodyLine(lines, span.line)) return "for-body";
+  const method = enclosingMethod(lines, span.line);
+  if (method && method !== "main") return "method";
+  return "main";
 }
 
 export function clickableTargets(source: string): Span[] {
@@ -86,6 +103,81 @@ function parseForHeader(line: string): ForHeader | null {
   };
   if (!header.init && !header.condition && !header.update) return null;
   return header;
+}
+
+function sameClause(clause: Clause | null | undefined, span: Span): boolean {
+  return Boolean(clause && clause.start === span.start && clause.end === span.end);
+}
+
+function isForBodyLine(lines: string[], lineNumber: number): boolean {
+  return lines.some((text, index) => {
+    const header = parseForHeader(text);
+    if (!header) return false;
+    const open = findBraceAfter(lines, index, header.closeParen);
+    if (!open) return false;
+    const end = matchBrace(lines, open.line, open.column);
+    for (let current = open.line; current <= end.line; current += 1) {
+      if (current === index || isSkippableLine(lines[current] ?? "")) continue;
+      if (current + 1 === lineNumber) return true;
+    }
+    return false;
+  });
+}
+
+function enclosingMethod(lines: string[], lineNumber: number): string | null {
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = methodName(lines[index] ?? "");
+    if (!name) continue;
+    const open = findBraceAfter(lines, index, (lines[index] ?? "").indexOf("("));
+    if (!open) continue;
+    const end = matchBrace(lines, open.line, open.column);
+    if (lineNumber > index + 1 && lineNumber <= end.line + 1) return name;
+  }
+  return null;
+}
+
+function methodName(text: string): string | null {
+  const trimmed = text.trim();
+  if (/^(if|for|while|switch|catch)\b/.test(trimmed) || trimmed.includes("=")) return null;
+  const match = trimmed.match(
+    /^(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*(?:void|int|boolean|long|double|float|char|String)\s+(\w+)\s*\([^;]*\)\s*\{?\s*$/,
+  );
+  return match?.[1] ?? null;
+}
+
+function findBraceAfter(lines: string[], lineIndex: number, column: number): { line: number; column: number } | null {
+  let currentColumn = Math.max(0, column);
+  for (let index = lineIndex; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const from = index === lineIndex ? currentColumn : 0;
+    const brace = line.indexOf("{", from);
+    if (brace >= 0) return { line: index, column: brace };
+    currentColumn = 0;
+  }
+  return null;
+}
+
+function matchBrace(lines: string[], startLine: number, startColumn: number): { line: number; column: number } {
+  let depth = 0;
+  for (let lineIndex = startLine; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
+    let index = lineIndex === startLine ? startColumn : 0;
+    while (index < line.length) {
+      const char = line[index];
+      if (char === '"' || char === "'") {
+        index = skipString(line, index, line.length);
+        continue;
+      }
+      if (char === "/" && line[index + 1] === "/") break;
+      if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return { line: lineIndex, column: index };
+      }
+      index += 1;
+    }
+  }
+  return { line: lines.length - 1, column: 0 };
 }
 
 function trimClause(line: string, start: number, end: number): Clause | null {

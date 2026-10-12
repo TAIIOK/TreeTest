@@ -1,22 +1,35 @@
-import { clickableTargets, describeFragment, fragmentKey, type Span } from "@/server/exprs";
+import { clickableTargets, describeFragment, fragmentKey, situationOf, type Span } from "@/server/exprs";
 import { chooseNext } from "@/server/litellm";
 import { lineText, numberSource } from "@/server/source";
 import type { TraceStep } from "@/server/trace";
 
 const MAX_STEPS = 80;
 
-const INSTRUCTIONS = [
-  "Pick the fragment Java executes next. Choose done only after the last statement of main.",
-  "Run main from top to bottom. Do not skip a statement.",
-  "Choose a call name before any fragment inside that method. Never enter a method before its call.",
-  "Arguments go left to right: the call, then its whole body, then the next argument. Then the outer call, then its body.",
-  "add(square(a), square(b)) is square(a), square body, square(b), square body, add, add body.",
-  "Statements above a for loop run before its initializer.",
-  "for (int i = 1; i <= 3; i++) { body } println is: initializer, condition, body, update, condition, body, update, condition, body, update, condition, println.",
-  "The body runs only when the previous fragment was the condition. After the body, choose the update, not the body again.",
-  "if: the condition, then only the taken branch.",
-  "A fragment may be chosen again later. Do not choose the fragment that just executed.",
-].join(" ");
+function instructionsFor(source: string, previous: TraceStep | undefined): string {
+  const tail = " Do not choose the fragment that just executed. Choose done only after the last statement of main.";
+  if (!previous) {
+    return "Pick the first fragment of main. Statements run from top to bottom." + tail;
+  }
+  const name = `«${previous.text}»`;
+  switch (situationOf(source, previous)) {
+    case "for-init":
+      return `The for initializer ${name} just ran. The loop condition is next, before the body.` + tail;
+    case "for-condition":
+      return `The loop condition ${name} just ran. If it is true, the body is next. If it is false, the statement after the loop is next. Do not choose done and do not choose the update before the body.`;
+    case "for-update":
+      return `The for update ${name} just ran. The loop condition is next, even if it is now false. Do not choose done and do not choose the body before that condition.`;
+    case "for-body":
+      return `The loop body statement ${name} just ran. If the body has another statement, continue it. Otherwise the update is next, not the condition and not the body again.` + tail;
+    case "call":
+      return `The call ${name} just ran. If this method is defined in this file, its body runs next, top to bottom. After that body returns, the next argument call is next, and only then the outer call.` + tail;
+    case "method":
+      return `Inside a method, ${name} just ran. If this method has another statement, choose it. If this was the return, go back to the caller: the next argument call if one remains, otherwise the outer call name. Do not enter the outer method before that call.` + tail;
+    case "if":
+      return `The condition ${name} just ran. Choose only the branch that executes, then the statement after the if.` + tail;
+    default:
+      return `The statement ${name} just ran. Continue main from top to bottom. On a call, arguments run left to right: the call, then its body, then the next argument, then the outer call. A for loop starts with its initializer, then its condition.` + tail;
+  }
+}
 
 export async function traceJava(source: string, signal?: AbortSignal): Promise<TraceStep[]> {
   const model = process.env.JEV_MODEL || "nimble";
@@ -44,10 +57,14 @@ export async function traceJava(source: string, signal?: AbortSignal): Promise<T
         : steps
             .map((step, stepIndex) => `${stepIndex + 1}. ${describeFragment(lineText(source, step.line), step)}`)
             .join("\n");
+    const previous = steps[steps.length - 1];
+    const stepCriteria = { ...criteria };
+    const situation = previous ? situationOf(source, previous) : undefined;
+    if (situation === "for-update" || situation === "for-condition") delete stepCriteria.done;
     const choice = await chooseNext({
       model,
-      instructions: INSTRUCTIONS,
-      criteria,
+      instructions: instructionsFor(source, previous),
+      criteria: stepCriteria,
       signal,
       state: `Java program. Execution starts at main.\n${numberSource(source)}\n\nFragments:\n${catalog}\n\nAlready executed, in order:\n${history}${rejection}`,
     });
@@ -61,7 +78,6 @@ export async function traceJava(source: string, signal?: AbortSignal): Promise<T
       throw new Error(`JEV вернул неизвестный фрагмент ${choice}`);
     }
 
-    const previous = steps[steps.length - 1];
     if (previous && fragmentKey(previous) === choice) {
       if (rejection) return finish(steps);
       rejection = `\n\nThe last answer repeated ${describeFragment(lineText(source, previous.line), previous)}, which just executed. Choose a different fragment.`;
